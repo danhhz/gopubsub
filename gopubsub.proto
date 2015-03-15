@@ -1,0 +1,36 @@
+// Copyright (C) 2015 Daniel Harrison
+//go:generate protoc gopubsub.proto --go_out=plugins=grpc:server
+
+syntax="proto3";
+
+package server;
+
+service PubSub {
+  rpc PublishMulti (PublishMultiRequest) returns (PublishMultiReply) {}
+  rpc Subscribe (SubscribeRequest) returns (stream SubscribeResponse) {}
+}
+
+message Message {
+  uint64 offset = 1;
+  uint32 crc = 2;  // IEEE crc32
+
+  bytes key = 10;
+  bytes value = 11;
+}
+
+message PublishMultiRequest {
+  string topic = 1;
+  repeated Message messages = 2;
+}
+
+message PublishMultiReply {
+}
+
+message SubscribeRequest {
+  string topic = 1;
+  uint64 offset = 2;
+}
+
+message SubscribeResponse {
+  repeated Message messages = 1;
+}
