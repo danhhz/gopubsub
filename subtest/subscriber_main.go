@@ -61,7 +61,7 @@ func main() {
 			log.Fatalf("%v.Subscribe(_) = _, %v", c, err)
 		}
 		for _, message := range response.GetMessages() {
-			log.Print("[", *topic, "] key=", string(message.Key), " value=", string(message.Value))
+			log.Print("[", *topic, "] ", string(message.Key), "|", string(message.Value))
 		}
 	}
 }

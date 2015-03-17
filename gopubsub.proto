@@ -12,7 +12,6 @@ service PubSub {
 
 message Message {
   uint64 offset = 1;
-  uint32 crc = 2;  // IEEE crc32
 
   bytes key = 10;
   bytes value = 11;

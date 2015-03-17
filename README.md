@@ -10,13 +10,11 @@ A toy distributed pubsub written with [Go](http://golang.org/) and [gRPC](http:/
 - Tests
 - Benchmarks
 - Metrics
-- Offsets
 - Distributed brokers
 - Partitions
 - Replication
 - Synchronous producers
 - Consumer API
-- Load previously written data instead of destroying it on startup
 - Multiple segment files
 - Timeouts
 - Message delivery semantics
@@ -24,6 +22,10 @@ A toy distributed pubsub written with [Go](http://golang.org/) and [gRPC](http:/
 - Data retention
 - Mmap in the consumer implementation
 - Latency auditing
+
+## v0.2
+- Offsets
+- Load previously written data instead of destroying it on startup
 
 ## v0.1
 - Placeholder binary format

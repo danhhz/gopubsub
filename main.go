@@ -14,7 +14,7 @@ import (
 
 func main() {
 	var port = flag.Int("port", 8054, "")
-	var path = flag.String("path", "/tmp/gopubpub", "")
+	var path = flag.String("path", "/tmp/gopubsub", "")
 
 	flag.Parse()
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
