@@ -19,8 +19,10 @@ import (
 func SendTest(c *pb.PubSubClient, topic string, size int, wg *sync.WaitGroup) {
 	var request = pb.PublishMultiRequest{Topic: topic}
 	for i := 0; i < size; i++ {
-		var message = pb.Message{Key: []byte(fmt.Sprintf("key-%d", i)), Value: []byte(fmt.Sprintf("value-%d", i))}
-		request.Messages = append(request.Messages, &message)
+		if key, err := time.Now().MarshalText(); err == nil {
+			var message = pb.Message{Key: key, Value: []byte(fmt.Sprintf("value-%d", i))}
+			request.Messages = append(request.Messages, &message)
+		}
 	}
 
 	var t = rand.Intn(100)

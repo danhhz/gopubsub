@@ -17,19 +17,18 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/paperstreet/gopubsub/tail"
-
 	"github.com/golang/protobuf/proto"
 	"golang.org/x/net/context"
 )
 
 type Server struct {
+	ctx    context.Context
 	dir    string
-	topics map[string]*TopicMessageSets
+	topics map[string]*Topic
 }
 
 func NewServer(dir string) (*Server, error) {
-	server := Server{dir, make(map[string]*TopicMessageSets)}
+	server := Server{context.Background(), dir, make(map[string]*Topic)}
 	if err := server.init(); err != nil {
 		return nil, err
 	}
@@ -56,13 +55,13 @@ func (s *Server) init() error {
 			if err != nil {
 				return err
 			}
-			topic := TopicMessageSets{name: fileInfo.Name()}
+			topic := Topic{name: fileInfo.Name()}
 			for _, messageSetFile := range messageSets {
 				if filepath.Ext(messageSetFile.Name()) != ".pubsub" {
 					continue
 				}
 
-				messageSet, err := NewMessageSet(path.Join(s.dir, fileInfo.Name(), messageSetFile.Name()))
+				messageSet, err := NewMessageSet(s.ctx, path.Join(s.dir, fileInfo.Name(), messageSetFile.Name()))
 				if err != nil {
 					return err
 				}
@@ -105,12 +104,15 @@ func (s *Server) PublishMulti(ctx context.Context, in *PublishMultiRequest) (*Pu
 		log.Print("[", in.Topic, "] Created ", messageSetPath)
 
 		messageSet := MessageSet{path: messageSetPath, offsetBegin: uint64(offset)}
-		topic = &TopicMessageSets{name: in.Topic, writer: bufio.NewWriter(f)}
+		topic = &Topic{name: in.Topic, writer: bufio.NewWriter(f)}
 		topic.messageSets = append(topic.messageSets, messageSet)
 		s.topics[topic.name] = topic
 	}
 
 	var sizeBuf = make([]byte, 4)
+	var magicBuf = make([]byte, 1)
+	magicBuf[0] = 0
+
 	var crc = crc32.NewIEEE()
 	for _, message := range in.GetMessages() {
 		var encoded, err = proto.Marshal(message)
@@ -119,26 +121,26 @@ func (s *Server) PublishMulti(ctx context.Context, in *PublishMultiRequest) (*Pu
 		}
 
 		binary.LittleEndian.PutUint32(sizeBuf, uint32(len(encoded)+5))
-		_, err = topic.writer.Write(sizeBuf)
+		_, err = topic.Write(sizeBuf)
 		if err != nil {
 			return nil, err
 		}
-		err = topic.writer.WriteByte(byte(0))
+		_, err = topic.Write(magicBuf)
 		if err != nil {
 			return nil, err
 		}
 		crc.Reset()
 		crc.Sum(encoded)
 		binary.LittleEndian.PutUint32(sizeBuf, uint32(crc.Sum32()))
-		_, err = topic.writer.Write(sizeBuf)
+		_, err = topic.Write(sizeBuf)
 		if err != nil {
 			return nil, err
 		}
 
-		_, err = io.Copy(topic.writer, bytes.NewReader(encoded))
+		_, err = io.Copy(topic, bytes.NewReader(encoded))
 	}
 
-	err := topic.writer.Flush()
+	err := topic.Flush()
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +150,10 @@ func (s *Server) PublishMulti(ctx context.Context, in *PublishMultiRequest) (*Pu
 
 func (s *Server) Subscribe(in *SubscribeRequest, srv PubSub_SubscribeServer) error {
 	log.Print("[", in.Topic, "] Opening for subscription")
+	defer func() {
+		log.Print("[", in.Topic, "] Closed subscription")
+	}()
+
 	topic, ok := s.topics[in.Topic]
 	if !ok {
 		return errors.New(fmt.Sprintf("No such topic: ", in.Topic))
@@ -164,20 +170,29 @@ func (s *Server) Subscribe(in *SubscribeRequest, srv PubSub_SubscribeServer) err
 		}
 	}
 
-	tailer, err := tail.TailFile(messageSet.path, tail.Config{Follow: true})
+	f, err := os.Open(messageSet.path)
 	if err != nil {
 		return err
 	}
+	mReader := NewMessageSetReader(srv.Context(), f, topic.Listen(srv.Context()))
 
 	// TODO(dan): Check for reasonable offset in request, otherwise we'll be here
 	// for a while.
 	for i := uint64(0); i < in.Offset-messageSet.offsetBegin; i++ {
-		<-tailer.Messages
+		_, err := mReader.ReadMessage()
+		if err != nil {
+			return err
+		}
 	}
 
-	for messageBytes := range tailer.Messages {
+	for {
+		messageBytes, err := mReader.ReadMessage()
+		if err != nil {
+			return err
+		}
+
 		message := new(Message)
-		err = proto.Unmarshal(*messageBytes, message)
+		err = proto.Unmarshal(messageBytes, message)
 
 		response := SubscribeResponse{}
 		response.Messages = append(response.Messages, message)

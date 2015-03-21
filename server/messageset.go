@@ -3,7 +3,6 @@
 package server
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -14,6 +13,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/paperstreet/gopubsub/follow"
+
+	"golang.org/x/net/context"
 )
 
 type MessageSet struct {
@@ -21,20 +24,8 @@ type MessageSet struct {
 	offsetBegin uint64
 	offsetEnd   uint64
 }
-type MessageSetSort []MessageSet
 
-func (s MessageSetSort) Len() int           { return len(s) }
-func (s MessageSetSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-func (s MessageSetSort) Less(i, j int) bool { return s[i].offsetBegin < s[j].offsetBegin }
-
-type TopicMessageSets struct {
-	name string
-	// mu sync.Mutex
-	messageSets []MessageSet
-	writer      *bufio.Writer
-}
-
-func NewMessageSet(path string) (*MessageSet, error) {
+func NewMessageSet(ctx context.Context, path string) (*MessageSet, error) {
 	basename := filepath.Base(path)
 	offset, err := strconv.ParseUint(strings.TrimSuffix(basename, filepath.Ext(basename)), 10, 64)
 	if err != nil {
@@ -42,14 +33,14 @@ func NewMessageSet(path string) (*MessageSet, error) {
 	}
 
 	messageSet := MessageSet{path: path, offsetBegin: offset}
-	if err = messageSet.validate(); err != nil {
+	if err = messageSet.validate(ctx); err != nil {
 		return nil, err
 	}
 
 	return &messageSet, nil
 }
 
-func (ms *MessageSet) validate() error {
+func (ms *MessageSet) validate(ctx context.Context) error {
 	log.Print("Validating message set: ", *ms)
 
 	f, err := os.Open(ms.path)
@@ -57,10 +48,10 @@ func (ms *MessageSet) validate() error {
 		return err
 	}
 
-	reader := bufio.NewReader(f)
+	r := NewMessageSetReader(ctx, f, nil)
 	ms.offsetEnd = ms.offsetBegin
 	for {
-		_, err := ms.readMessage(reader)
+		_, err = r.readNoWait()
 		if err == io.EOF {
 			log.Print("Validated message set:  ", *ms)
 			return nil
@@ -72,21 +63,55 @@ func (ms *MessageSet) validate() error {
 	return nil
 }
 
-// TODO(dan): Reduce duplication between this and tail.go.
-func (ms *MessageSet) readMessage(reader *bufio.Reader) ([]byte, error) {
+type MessageSetReader struct {
+	ctx context.Context
+	r   *follow.Reader
+}
+
+func NewMessageSetReader(ctx context.Context, f *os.File, ping chan int64) *MessageSetReader {
+	follower := follow.NewReader(ctx, f, ping)
+	return &MessageSetReader{ctx, follower}
+}
+
+func (ms *MessageSetReader) ReadMessage() ([]byte, error) {
+	if err := ms.r.WaitBytes(4); err != nil {
+		return nil, err
+	}
+	length, err := readLength(ms.r)
+	if err != nil {
+		return nil, err
+	}
+	if err := ms.r.WaitBytes(int64(length)); err != nil {
+		return nil, err
+	}
+	return readPayload(ms.r, length)
+}
+
+func (ms *MessageSetReader) readNoWait() ([]byte, error) {
+	length, err := readLength(ms.r)
+	if err != nil {
+		return nil, err
+	}
+	return readPayload(ms.r, length)
+}
+
+func readLength(reader io.Reader) (uint32, error) {
 	lengthBuf := make([]byte, 4)
 	_, err := io.ReadFull(reader, lengthBuf)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	length := binary.LittleEndian.Uint32(lengthBuf)
+	return binary.LittleEndian.Uint32(lengthBuf), nil
+}
 
-	magic, err := reader.ReadByte()
+func readPayload(reader io.Reader, length uint32) ([]byte, error) {
+	magicBuf := make([]byte, 1)
+	_, err := io.ReadFull(reader, magicBuf)
 	if err != nil {
 		return nil, err
 	}
-	if magic != byte(0) {
-		return nil, errors.New(fmt.Sprintf("Unsupported magic: %d", int(magic)))
+	if magicBuf[0] != 0 {
+		return nil, errors.New(fmt.Sprintf("Unsupported magic: %d", magicBuf[0]))
 	}
 
 	crcBuf := make([]byte, 4)
@@ -111,3 +136,9 @@ func (ms *MessageSet) readMessage(reader *bufio.Reader) ([]byte, error) {
 
 	return dataBuf, nil
 }
+
+type MessageSetSort []MessageSet
+
+func (s MessageSetSort) Len() int           { return len(s) }
+func (s MessageSetSort) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+func (s MessageSetSort) Less(i, j int) bool { return s[i].offsetBegin < s[j].offsetBegin }
