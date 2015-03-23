@@ -8,7 +8,6 @@ A toy distributed pubsub written with [Go](http://golang.org/) and [gRPC](http:/
 - Close yo files/graceful exits and disconnects
 - Docs
 - Tests
-- Benchmarks
 - Metrics
 - Distributed brokers
 - Partitions
